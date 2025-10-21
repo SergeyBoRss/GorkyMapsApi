@@ -29,6 +29,7 @@ class RoutePoint(BaseModel):
     longitude: float
     title: str
     description: str
+    address: str
 
 
 class RouteResponse(BaseModel):

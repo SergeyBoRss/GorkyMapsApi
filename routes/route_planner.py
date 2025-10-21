@@ -25,14 +25,20 @@ DEFAULT_CANDIDATE_STEP = CANDIDATE_EXPANSION_STEP
 
 @router.post("", response_model=RouteResponse)
 def build_routes(request: RouteRequest) -> RouteResponse:
-    log.info("Building routes | interests=%s | walking_time=%.2fh", request.interests, request.walking_time)
+    log.info(
+        "Building routes | interests=%s | walking_time=%.2fh",
+        request.interests,
+        request.walking_time,
+    )
     objects = get_objects()
     objects_by_id = get_objects_by_id()
     full_matrix = get_duration_matrix()
 
     matched_ids = select_object_ids_by_tags(objects, request.interests)
     if not matched_ids:
-        raise HTTPException(status_code=404, detail="No objects found for provided interests")
+        raise HTTPException(
+            status_code=404, detail="No objects found for provided interests"
+        )
 
     max_total_time = request.walking_time * 60.0
     user_location: Optional[Dict[str, float]] = None
@@ -49,7 +55,9 @@ def build_routes(request: RouteRequest) -> RouteResponse:
         log.debug("Trying candidate_limit=%d/%d", candidate_limit, len(matched_ids))
         trimmed_ids = matched_ids[:candidate_limit]
         try:
-            selected_ids, submatrix = extract_submatrix_by_ids(full_matrix, objects, trimmed_ids)
+            selected_ids, submatrix = extract_submatrix_by_ids(
+                full_matrix, objects, trimmed_ids
+            )
         except KeyError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -59,7 +67,9 @@ def build_routes(request: RouteRequest) -> RouteResponse:
             if str(object_id) in objects_by_id
         ]
         if len(filtered_objects) < 3:
-            raise HTTPException(status_code=404, detail="Not enough objects to build a route")
+            raise HTTPException(
+                status_code=404, detail="Not enough objects to build a route"
+            )
 
         routes = find_top_routes(
             submatrix,
@@ -75,10 +85,16 @@ def build_routes(request: RouteRequest) -> RouteResponse:
         if len(routes) >= 3 or candidate_limit >= len(matched_ids):
             break
 
-        candidate_limit = min(len(matched_ids), candidate_limit + DEFAULT_CANDIDATE_STEP)
+        candidate_limit = min(
+            len(matched_ids), candidate_limit + DEFAULT_CANDIDATE_STEP
+        )
 
     if len(routes) < 3:
-        log.warning("Not enough unique routes (got %d) for interests=%s", len(routes), request.interests)
+        log.warning(
+            "Not enough unique routes (got %d) for interests=%s",
+            len(routes),
+            request.interests,
+        )
         raise HTTPException(status_code=404, detail="Not enough diverse routes found")
 
     response_routes: List[List[RoutePoint]] = []
@@ -98,6 +114,7 @@ def build_routes(request: RouteRequest) -> RouteResponse:
                     longitude=float(longitude),
                     title=str(obj.get("title") or ""),
                     description=str(obj.get("description") or ""),
+                    address=str(obj.get("address") or ""),
                 )
             )
         if points:
@@ -106,7 +123,12 @@ def build_routes(request: RouteRequest) -> RouteResponse:
     final_routes = response_routes[:3]
     log.info("Built %d candidate routes; returning %d", len(routes), len(final_routes))
     if len(final_routes) < 3:
-        log.warning("Filtered routes below 3 due to missing coordinates (got %d)", len(final_routes))
-        raise HTTPException(status_code=404, detail="Not enough routes with valid coordinates")
+        log.warning(
+            "Filtered routes below 3 due to missing coordinates (got %d)",
+            len(final_routes),
+        )
+        raise HTTPException(
+            status_code=404, detail="Not enough routes with valid coordinates"
+        )
 
     return RouteResponse(routes=final_routes)
