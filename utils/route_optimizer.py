@@ -7,7 +7,6 @@ from utils.config import (
     MAX_COMBINATIONS_PER_LENGTH,
     MAX_ROUTE_CANDIDATES_DEFAULT,
     MAX_ROUTE_EVALUATIONS,
-    ROUTE_DIFFERENCE_RATIO,
 )
 from utils.logger import get_logger
 
@@ -20,6 +19,12 @@ from utils.route_support import (
 )
 
 log = get_logger("[RouteOptimizer]")
+
+
+TURN_PENALTY_THRESHOLD = 130.0
+TURN_SHARP_WEIGHT = 1.0
+TURN_SMOOTH_WEIGHT = 0.3
+TURN_UNUSED_WEIGHT = 4.0
 
 
 @dataclass(frozen=True)
@@ -229,27 +234,16 @@ def find_top_routes(
 
         candidate_indices = selected
 
-    top_candidates: List[Tuple[Tuple[int, float, float], RouteResult]] = []
     seen_paths: Set[Tuple[Any, ...]] = set()
-    buffer_limit = max(30, max_results * 40)
-
-    def register_candidate(score: Tuple[int, float, float], route: RouteResult) -> None:
-        for _, existing_route in top_candidates:
-            if _too_similar(route, existing_route, overlap_ratio):
-                return
-        top_candidates.append((score, route))
-        top_candidates.sort(key=lambda item: item[0])
-        if len(top_candidates) > buffer_limit:
-            del top_candidates[buffer_limit:]
-
-    overlap_ratio = ROUTE_DIFFERENCE_RATIO
-
     current_limit = len(candidate_indices)
 
     max_route_evaluations = MAX_ROUTE_EVALUATIONS
     evaluations = 0
     stop_search = False
-    distinct_cache: Optional[List[RouteResult]] = None
+
+    best_route: Optional[RouteResult] = None
+    best_score: Optional[Tuple[float, float, float, int]] = None
+    best_unused_time = math.inf
 
     for length in range(min(max_stops, current_limit), min_stops - 1, -1):
         if stop_search:
@@ -296,8 +290,6 @@ def find_top_routes(
                 variation = coefficient_of_variation(leg_times)
                 unused_time = max_total_time - total_time
 
-                score = (unused_time, -length, variation)
-
                 route = RouteResult(
                     start_id=start_object_id,
                     stops=[id_by_index[idx] for idx in order],
@@ -312,33 +304,34 @@ def find_top_routes(
                     unused_time=unused_time,
                     start_location=start_location,
                 )
-                register_candidate(score, route)
+                avg_turn, sharp_penalty = _compute_turn_metrics(
+                    order, id_by_index, objects_by_id
+                )
+                turn_cost = (TURN_SHARP_WEIGHT * sharp_penalty) + (
+                    TURN_SMOOTH_WEIGHT * avg_turn
+                )
+                unused_cost = TURN_UNUSED_WEIGHT * unused_time
+                cost = turn_cost + unused_cost + variation
+                score = (cost, unused_time, variation, -length)
+
+                if best_score is None or score < best_score:
+                    best_score = score
+                    best_route = route
+                    best_unused_time = unused_time
+
                 evaluations += 1
-                if (
-                    evaluations >= max_route_evaluations
-                    and len(top_candidates) >= max_results
-                ):
-                    maybe_distinct = _choose_distinct_routes(
-                        top_candidates, overlap_ratio, max_results
-                    )
-                    if len(maybe_distinct) >= max_results:
-                        distinct_cache = maybe_distinct
-                        stop_search = True
-                        break
+                if evaluations >= max_route_evaluations or best_unused_time <= 1.0:
+                    stop_search = True
+                    break
 
-        if top_candidates and len(top_candidates) >= max_results:
-            best_unused = top_candidates[0][0][0]
-            if best_unused <= 1.0:
-                break
+        if stop_search:
+            break
 
-    if distinct_cache is not None:
-        return distinct_cache
-    top_candidates.sort(key=lambda item: item[0])
-    distinct = _choose_distinct_routes(top_candidates, overlap_ratio, max_results)
+    if best_route is not None:
+        return [best_route]
 
     if (
-        len(distinct) < max_results
-        and max_candidates is not None
+        max_candidates is not None
         and max_candidates > 0
         and current_limit < total_candidates
     ):
@@ -362,36 +355,7 @@ def find_top_routes(
                 max_candidates=next_limit,
             )
 
-    return distinct
-
-
-def _choose_distinct_routes(
-    candidates: List[Tuple[Tuple[int, float, float], RouteResult]],
-    overlap_ratio: float,
-    max_results: int,
-) -> List[RouteResult]:
-    if not candidates:
-        return []
-
-    thresholds = [overlap_ratio, min(0.6, overlap_ratio + 0.2), 1.0]
-    for threshold in thresholds:
-        selection: List[RouteResult] = []
-        for _, route in candidates:
-            if all(
-                not _too_similar(route, existing, threshold) for existing in selection
-            ):
-                selection.append(route)
-            if len(selection) == max_results:
-                return selection
-
-    return [route for _score, route in candidates[:max_results]]
-
-
-def _too_similar(route_a: RouteResult, route_b: RouteResult, ratio: float) -> bool:
-    shared = len(route_a.stop_set & route_b.stop_set)
-    union_size = len(route_a.stop_set | route_b.stop_set) or 1
-    shared_ratio = shared / union_size
-    return shared_ratio > ratio
+    return []
 
 
 def _build_path(
@@ -448,6 +412,85 @@ def _build_legs(
         previous_id = current_id
 
     return legs, leg_times
+
+
+def _compute_turn_metrics(
+    order: Tuple[int, ...],
+    ids: Sequence[Any],
+    objects_by_id: Mapping[Any, Mapping[str, Any]],
+) -> Tuple[float, float]:
+    coords: List[Tuple[float, float]] = []
+    for idx in order:
+        object_id = ids[idx]
+        obj = objects_by_id.get(object_id) or objects_by_id.get(str(object_id))
+        if not obj:
+            continue
+        coord = _extract_coord(obj)
+        if coord is None:
+            continue
+        coords.append(coord)
+
+    if len(coords) < 3:
+        return 0.0, 0.0
+
+    bearings: List[float] = []
+    for start, end in zip(coords, coords[1:]):
+        bearing = _bearing(start, end)
+        if bearing is None:
+            continue
+        bearings.append(bearing)
+
+    if len(bearings) < 2:
+        return 0.0, 0.0
+
+    deltas: List[float] = []
+    for first, second in zip(bearings, bearings[1:]):
+        delta = abs(second - first)
+        if delta > 180.0:
+            delta = 360.0 - delta
+        deltas.append(delta)
+
+    if not deltas:
+        return 0.0, 0.0
+
+    avg_turn = sum(deltas) / len(deltas)
+    sharp_penalty = sum(
+        max(0.0, delta - TURN_PENALTY_THRESHOLD) for delta in deltas
+    )
+    return avg_turn, sharp_penalty
+
+
+def _bearing(
+    start: Tuple[float, float], end: Tuple[float, float]
+) -> Optional[float]:
+    lat1, lon1 = start
+    lat2, lon2 = end
+    if lat1 == lat2 and lon1 == lon2:
+        return None
+
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+    d_lon = math.radians(lon2 - lon1)
+
+    y = math.sin(d_lon) * math.cos(lat2_rad)
+    x = math.cos(lat1_rad) * math.sin(lat2_rad) - math.sin(lat1_rad) * math.cos(
+        lat2_rad
+    ) * math.cos(d_lon)
+    if x == 0.0 and y == 0.0:
+        return None
+    bearing = math.degrees(math.atan2(y, x))
+    return (bearing + 360.0) % 360.0
+
+
+def _extract_coord(obj: Mapping[str, Any]) -> Optional[Tuple[float, float]]:
+    lat = obj.get("lat", obj.get("latitude"))
+    lon = obj.get("lon", obj.get("longitude"))
+    if lat is None or lon is None:
+        return None
+    try:
+        return float(lat), float(lon)
+    except (TypeError, ValueError):
+        return None
 
 
 def _is_finite(value: Any) -> bool:
