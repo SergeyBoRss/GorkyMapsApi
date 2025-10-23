@@ -32,21 +32,15 @@ FastAPI‑сервис для подбора пеших маршрутов по 
   - `durations.csv` — квадратная матрица длительностей (секунды), обычно с заголовками по ID.
 - `requirements.txt` — зависимости.
 
-## Быстрый старт
+## Быстрый старт (Docker)
 
-1) Установка зависимостей:
+- Подготовка: скопируйте `.env.example` в `.env` и заполните при необходимости (`ORS_KEY`, `GIGACHAT_CLIENT_ID`, `GIGACHAT_CLIENT_SECRET`).
+- Запуск API: `make up` (для остановки: `make down`, перезапуск: `make restart`)
+- Откройте Swagger UI: `http://localhost:8000/docs`
 
-```
-pip install -r requirements.txt
-```
-
-2) Подготовьте данные в `data/objects.csv` и `data/durations.csv`.
-
-3) Запуск API (разработка):
-
-```
-uvicorn main:app --reload
-```
+Примечания:
+- В контейнер пробрасывается только каталог данных `./data` как том (`./data:/app/data`). Логи не сохраняются на хосте.
+- Сервер запускается через `uvicorn` на порту `8000`.
 
 Приложение поднимет `/api` с CORS и роутом `/api/routes`.
 
