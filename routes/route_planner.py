@@ -5,6 +5,7 @@ from utils.config import (
     MAX_ROUTE_CANDIDATES_DEFAULT,
 )
 from utils.logger import get_logger
+from gpt_api.get_description import build_route_explanation, GigaChatError
 from fastapi import APIRouter, HTTPException
 
 from schemas import RoutePoint, RouteRequest, RouteResponse
@@ -89,16 +90,15 @@ def build_routes(request: RouteRequest) -> RouteResponse:
             len(matched_ids), candidate_limit + DEFAULT_CANDIDATE_STEP
         )
 
-    if len(routes) < 3:
+    if len(routes) < 1:
         log.warning(
-            "Not enough unique routes (got %d) for interests=%s",
-            len(routes),
+            "No routes found for interests=%s",
             request.interests,
         )
-        raise HTTPException(status_code=404, detail="Not enough diverse routes found")
+        raise HTTPException(status_code=404, detail="No routes found")
 
     response_routes: List[List[RoutePoint]] = []
-    for route in routes[:3]:
+    for route in routes[:1]:
         points: List[RoutePoint] = []
         for stop_id in route.stops:
             obj = objects_by_id.get(str(stop_id))
@@ -120,15 +120,29 @@ def build_routes(request: RouteRequest) -> RouteResponse:
         if points:
             response_routes.append(points)
 
-    final_routes = response_routes[:3]
-    log.info("Built %d candidate routes; returning %d", len(routes), len(final_routes))
-    if len(final_routes) < 3:
+    final_routes = response_routes[:1]
+    if len(final_routes) < 1:
         log.warning(
-            "Filtered routes below 3 due to missing coordinates (got %d)",
-            len(final_routes),
+            "No routes with valid coordinates after filtering",
         )
-        raise HTTPException(
-            status_code=404, detail="Not enough routes with valid coordinates"
-        )
+        raise HTTPException(status_code=404, detail="No routes with valid coordinates")
 
-    return RouteResponse(routes=final_routes)
+    explanation: Optional[str] = None
+    best_points: List[RoutePoint] = final_routes[0]
+    try:
+        explanation = build_route_explanation(
+            route_points=[p.model_dump() for p in best_points],
+            tags=request.interests,
+            time_limit_min=max_total_time,
+        )
+    except GigaChatError as e:
+        log.error("GigaChat explanation error: %s", e)
+        explanation = None
+
+    log.info(
+        "Built %d candidate routes; returning 1 route with explanation=%s",
+        len(routes),
+        "yes" if explanation else "no",
+    )
+
+    return RouteResponse(routes=best_points, explanation=explanation)

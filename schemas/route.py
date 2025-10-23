@@ -33,4 +33,5 @@ class RoutePoint(BaseModel):
 
 
 class RouteResponse(BaseModel):
-    routes: List[List[RoutePoint]]
+    routes: List[RoutePoint]
+    explanation: Optional[str] = None
