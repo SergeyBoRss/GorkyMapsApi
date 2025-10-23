@@ -41,7 +41,7 @@ def build_routes(request: RouteRequest) -> RouteResponse:
             status_code=404, detail="No objects found for provided interests"
         )
 
-    max_total_time = request.walking_time * 60.0
+    max_total_time = request.walking_time
     user_location: Optional[Dict[str, float]] = None
     if request.user_location is not None:
         user_location = {
