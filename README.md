@@ -70,15 +70,16 @@ uvicorn main:app --reload
 
 ```
 {
-  "routes": [
+  "routes":
     [
       {"latitude": 56.3, "longitude": 44.0, "title": "...", "description": "...", "address": "..."},
       {"latitude": 56.31, "longitude": 44.01, "title": "...", "description": "...", "address": "..."}
     ],
-    ... // до 3 маршрутов
-  ]
+    "explanation": "Маршрут начинается с ..."
 }
 ```
+
+Поле `explanation` может быть опущено
 
 - Возможные ошибки:
   - `404 Not Found` — нет объектов по интересам; недостаточно валидных/разнообразных маршрутов; у точек нет координат.
@@ -138,4 +139,9 @@ python scripts/normalize_xlsx.py --input data/cultural_objects_mnn.xlsx \
 python scripts/ors_building.py data/points.csv --out data/durations.csv
 ```
 
+## Интеграция GigaChat
 
+- Назначение: генерация краткого описания маршрута на естественном языке.
+- Точки входа: `gpt_api/get_description.py` (функция `build_route_explanation`).
+- Переменные окружения: задайте `GIGACHAT_CLIENT_ID` и `GIGACHAT_CLIENT_SECRET` в `.env` или как системные переменные (см. шаблон `.env.example`).
+- Сетевые требования: по умолчанию используется `verify=False` для HTTPS‑запросов к GigaChat. Для строгой проверки укажите путь к корневому сертификату Сбера и передайте его как `verify` в `build_route_explanation` в `routes/route_planner.py`, либо добавьте сертификат в доверенные корневые в системе.
