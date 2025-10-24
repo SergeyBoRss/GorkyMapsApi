@@ -79,11 +79,11 @@ def build_routes(request: RouteRequest) -> RouteResponse:
             user_location=user_location,
             min_stops=3,
             max_stops=5,
-            max_results=3,
+            max_results=1,
             max_candidates=min(candidate_limit, len(filtered_objects)),
         )
 
-        if len(routes) >= 3 or candidate_limit >= len(matched_ids):
+        if routes or candidate_limit >= len(matched_ids):
             break
 
         candidate_limit = min(
@@ -98,7 +98,7 @@ def build_routes(request: RouteRequest) -> RouteResponse:
         raise HTTPException(status_code=404, detail="No routes found")
 
     response_routes: List[List[RoutePoint]] = []
-    for route in routes[:1]:
+    for route in routes:
         points: List[RoutePoint] = []
         for stop_id in route.stops:
             obj = objects_by_id.get(str(stop_id))
